@@ -218,15 +218,22 @@ export class OpenCodeChatRuntime implements ChatRuntime {
     // Spawn the process
     // On Windows, spawn may not properly pipe stdout with .cmd files,
     // so wrap with cmd.exe for better compatibility.
-    const proc = spawn(
-      process.platform === 'win32' ? 'cmd.exe' : cliPath,
-      process.platform === 'win32' ? ['/c', cliPath, ...args] : args,
-      {
-        cwd: vaultPath,
-        env: { ...process.env },
-        stdio: ['ignore', 'pipe', 'pipe'],
-      }
-    );
+    let proc: ChildProcess;
+    try {
+      proc = spawn(
+        process.platform === 'win32' ? 'cmd.exe' : cliPath,
+        process.platform === 'win32' ? ['/c', cliPath, ...args] : args,
+        {
+          cwd: vaultPath,
+          env: { ...process.env },
+          stdio: ['ignore', 'pipe', 'pipe'],
+        }
+      );
+    } catch (err) {
+      yield { type: 'error', content: `Failed to spawn OpenCode: ${err instanceof Error ? err.message : String(err)}` };
+      yield { type: 'done' };
+      return;
+    }
     this.currentProcess = proc;
 
     const chunkBuffer: StreamChunk[] = [];
@@ -250,7 +257,7 @@ export class OpenCodeChatRuntime implements ChatRuntime {
     
     const rl = createInterface({ input: proc.stdout });
     rl.on('line', (line) => {
-      if (this.canceled) {
+      if (this.canceled || processEnded) {
         return;
       }
       
@@ -258,11 +265,15 @@ export class OpenCodeChatRuntime implements ChatRuntime {
       try {
         event = JSON.parse(line) as OpenCodeEvent;
       } catch {
-        // Skip non-JSON lines
+        // Skip non-JSON lines (e.g., raw output, debug messages)
         return;
       }
       
       this.handleEvent(event, enqueue);
+    });
+
+    rl.on('error', (err) => {
+      enqueue({ type: 'error', content: `Stream read error: ${err.message}` });
     });
 
     // Collect stderr for errors
@@ -295,8 +306,11 @@ export class OpenCodeChatRuntime implements ChatRuntime {
           break;
         }
       } else if (processEnded) {
-        yield { type: 'done' };
-        break;
+        // Process ended but buffer was empty - done was already enqueued by close handler
+        // Wait for the done chunk to arrive in the buffer
+        await new Promise<void>((resolve) => {
+          resolveChunk = resolve;
+        });
       } else {
         await new Promise<void>((resolve) => {
           resolveChunk = resolve;
@@ -326,7 +340,8 @@ export class OpenCodeChatRuntime implements ChatRuntime {
         if (!part) break;
 
         const toolName = part.tool ?? part.name ?? 'unknown';
-        const callId = part.callID ?? part.id ?? toolName;
+        // Generate unique fallback ID to avoid collisions when same tool is called multiple times
+        const callId = part.callID ?? part.id ?? `${toolName}-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
         const state = part.state;
 
         // Get input from state or legacy field and normalize field names
@@ -387,6 +402,7 @@ export class OpenCodeChatRuntime implements ChatRuntime {
           const cacheWrite = tokens.cache?.write ?? 0;
           const cacheRead = tokens.cache?.read ?? 0;
           const inputTokens = tokens.input + cacheWrite + cacheRead;
+          const contextWindow = this.getContextWindowForModel();
 
           enqueue({
             type: 'usage',
@@ -394,9 +410,9 @@ export class OpenCodeChatRuntime implements ChatRuntime {
               inputTokens,
               cacheCreationInputTokens: cacheWrite,
               cacheReadInputTokens: cacheRead,
-              contextWindow: 200000, // Default context window, could be model-specific
+              contextWindow,
               contextTokens: tokens.total,
-              percentage: Math.min(100, (tokens.total / 200000) * 100),
+              percentage: Math.min(100, (tokens.total / contextWindow) * 100),
             },
             sessionId: event.sessionID,
           });
@@ -406,6 +422,42 @@ export class OpenCodeChatRuntime implements ChatRuntime {
         break;
       }
     }
+  }
+
+  /**
+   * Get context window size based on the current model.
+   * Different models have different context limits.
+   */
+  private getContextWindowForModel(): number {
+    const settings = this.plugin.settings as unknown as Record<string, unknown>;
+    const providerSettings = ProviderSettingsCoordinator.getProviderSettingsSnapshot(settings, 'opencode');
+    const model = (providerSettings.model as string) || 'github-copilot/claude-sonnet-4.5';
+
+    // Context window sizes for common models
+    const contextWindows: Record<string, number> = {
+      // Claude models
+      'github-copilot/claude-sonnet-4': 200000,
+      'github-copilot/claude-sonnet-4.5': 200000,
+      'github-copilot/claude-sonnet-4.6': 200000,
+      'github-copilot/claude-opus-4.5': 200000,
+      'github-copilot/claude-opus-4.6': 200000,
+      'github-copilot/claude-haiku-4.5': 200000,
+      // GPT models
+      'github-copilot/gpt-4o': 128000,
+      'github-copilot/gpt-4.1': 128000,
+      'github-copilot/gpt-5-mini': 128000,
+      'github-copilot/gpt-5.1': 200000,
+      'github-copilot/gpt-5.2': 200000,
+      'github-copilot/gpt-5.2-codex': 200000,
+      'github-copilot/gpt-5.3-codex': 200000,
+      'github-copilot/gpt-5.4': 200000,
+      // Gemini models
+      'github-copilot/gemini-2.5-pro': 1000000,
+      // Default
+      'default': 200000,
+    };
+
+    return contextWindows[model] ?? contextWindows['default'];
   }
 
   /**
@@ -547,7 +599,6 @@ export class OpenCodeChatRuntime implements ChatRuntime {
   }
 
   cancel(): void {
-    console.log('[OpenCode] cancel() called', new Error().stack);
     this.canceled = true;
     if (this.currentProcess) {
       this.currentProcess.kill('SIGTERM');
@@ -556,7 +607,6 @@ export class OpenCodeChatRuntime implements ChatRuntime {
   }
 
   resetSession(): void {
-    console.log('[OpenCode] resetSession() called', new Error().stack);
     this.sessionManager.reset();
     this.cancel();
     this.ready = false;
