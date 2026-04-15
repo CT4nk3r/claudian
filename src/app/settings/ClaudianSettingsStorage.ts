@@ -27,6 +27,10 @@ import {
   getCodexProviderSettings,
   updateCodexProviderSettings,
 } from '../../providers/codex/settings';
+import {
+  getOpenCodeProviderSettings,
+  updateOpenCodeProviderSettings,
+} from '../../providers/opencode/settings';
 import { DEFAULT_CLAUDIAN_SETTINGS } from './defaultSettings';
 
 export {
@@ -213,9 +217,15 @@ export class ClaudianSettingsStorage {
       providerConfigs,
     };
 
+    const defaults = this.getDefaults();
     const merged = {
-      ...this.getDefaults(),
+      ...defaults,
       ...legacyNormalized,
+      // Deep-merge providerConfigs to preserve defaults for new providers
+      providerConfigs: {
+        ...defaults.providerConfigs,
+        ...providerConfigs,
+      },
     } as StoredClaudianSettings;
 
     updateClaudeProviderSettings(
@@ -225,6 +235,10 @@ export class ClaudianSettingsStorage {
     updateCodexProviderSettings(
       merged as unknown as Record<string, unknown>,
       getCodexProviderSettings(legacyProviderSettings),
+    );
+    updateOpenCodeProviderSettings(
+      merged as unknown as Record<string, unknown>,
+      getOpenCodeProviderSettings(legacyProviderSettings),
     );
 
     if (
