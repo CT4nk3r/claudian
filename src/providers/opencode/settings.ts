@@ -3,6 +3,7 @@ export interface OpenCodeProviderSettings {
   model: string;
   customCliPath: string;
   safeMode: OpenCodeSafeMode;
+  environmentHash: string;
 }
 
 export type OpenCodeSafeMode = 'workspace-write' | 'workspace-read' | 'none';
@@ -12,6 +13,7 @@ export const DEFAULT_OPENCODE_PROVIDER_SETTINGS: OpenCodeProviderSettings = {
   model: '',
   customCliPath: '',
   safeMode: 'workspace-write',
+  environmentHash: '',
 };
 
 export function getOpenCodeProviderSettings(settings: Record<string, unknown>): OpenCodeProviderSettings {
@@ -22,6 +24,7 @@ export function getOpenCodeProviderSettings(settings: Record<string, unknown>): 
     model: opencode?.model ?? DEFAULT_OPENCODE_PROVIDER_SETTINGS.model,
     customCliPath: opencode?.customCliPath ?? DEFAULT_OPENCODE_PROVIDER_SETTINGS.customCliPath,
     safeMode: opencode?.safeMode ?? DEFAULT_OPENCODE_PROVIDER_SETTINGS.safeMode,
+    environmentHash: opencode?.environmentHash ?? DEFAULT_OPENCODE_PROVIDER_SETTINGS.environmentHash,
   };
 }
 

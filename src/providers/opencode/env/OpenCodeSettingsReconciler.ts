@@ -2,13 +2,9 @@ import { getRuntimeEnvironmentText } from '../../../core/providers/providerEnvir
 import type { ProviderSettingsReconciler } from '../../../core/providers/types';
 import type { Conversation } from '../../../core/types';
 import { parseEnvironmentVariables } from '../../../utils/env';
-import { getOpenCodeProviderSettings } from '../settings';
+import { getOpenCodeProviderSettings, updateOpenCodeProviderSettings } from '../settings';
 import { getOpenCodeState } from '../types';
 import { openCodeChatUIConfig } from '../ui/OpenCodeChatUIConfig';
-
-interface OpenCodeProviderSettingsWithHash {
-  environmentHash?: string;
-}
 
 const ENV_HASH_KEYS = ['OPENCODE_MODEL', 'OPENCODE_BASE_URL', 'OPENCODE_API_KEY'];
 
@@ -21,16 +17,6 @@ function computeOpenCodeEnvHash(envText: string): string {
     .join('|');
 }
 
-function getEnvironmentHash(settings: Record<string, unknown>): string | undefined {
-  const opencode = settings.opencode as OpenCodeProviderSettingsWithHash | undefined;
-  return opencode?.environmentHash;
-}
-
-function setEnvironmentHash(settings: Record<string, unknown>, hash: string): void {
-  const current = getOpenCodeProviderSettings(settings);
-  settings.opencode = { ...current, environmentHash: hash };
-}
-
 export const openCodeSettingsReconciler: ProviderSettingsReconciler = {
   reconcileModelWithEnvironment(
     settings: Record<string, unknown>,
@@ -38,7 +24,7 @@ export const openCodeSettingsReconciler: ProviderSettingsReconciler = {
   ): { changed: boolean; invalidatedConversations: Conversation[] } {
     const envText = getRuntimeEnvironmentText(settings, 'opencode');
     const currentHash = computeOpenCodeEnvHash(envText);
-    const savedHash = getEnvironmentHash(settings);
+    const savedHash = getOpenCodeProviderSettings(settings).environmentHash;
 
     if (currentHash === savedHash) {
       return { changed: false, invalidatedConversations: [] };
@@ -65,7 +51,7 @@ export const openCodeSettingsReconciler: ProviderSettingsReconciler = {
       settings.model = openCodeChatUIConfig.getModelOptions({})[0]?.value ?? 'claude-sonnet-4';
     }
 
-    setEnvironmentHash(settings, currentHash);
+    updateOpenCodeProviderSettings(settings, { environmentHash: currentHash });
     return { changed: true, invalidatedConversations };
   },
 
